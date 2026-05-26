@@ -20,7 +20,15 @@ async function getEbayToken() {
     body: "grant_type=client_credentials&scope=https://api.ebay.com/oauth/api_scope",
   });
   const data = await res.json();
+  if (!data.access_token) throw new Error("Token failed: " + JSON.stringify(data));
   return data.access_token;
+}
+
+async function searchListings(token, query, limit = 25) {
+  const url = `https://api.ebay.com/buy/browse/v1/item_summary/search?q=${encodeURIComponent(query)}&filter=buyingOptions:{FIXED_PRICE}&sort=price&limit=${limit}`;
+  const res = await fetch(url, { headers: { "Authorization": `Bearer ${token}` } });
+  const data = await res.json();
+  return data.itemSummaries || [];
 }
 
 app.get("/api/flip", async (req, res) => {
@@ -29,52 +37,56 @@ app.get("/api/flip", async (req, res) => {
 
   try {
     const token = await getEbayToken();
-
-    // Get active listings sorted by price ascending, limit 20
-    const searchUrl = `https://api.ebay.com/buy/browse/v1/item_summary/search?q=${encodeURIComponent(query)}&filter=buyingOptions:{FIXED_PRICE}&sort=price&limit=20`;
-    const searchRes = await fetch(searchUrl, {
-      headers: { "Authorization": `Bearer ${token}` },
-    });
-    const searchData = await searchRes.json();
-    const items = searchData.itemSummaries || [];
+    const items = await searchListings(token, query, 25);
 
     if (items.length === 0) {
-      return res.json({ flips: [], avgSoldPrice: 0, soldCount: 0, message: "No listings found" });
+      return res.json({ flips: [], avgSoldPrice: "0", soldCount: 0, allListings: [], message: "No listings found on eBay for this search." });
     }
 
-    // Calculate average price from all listings
-    const prices = items.map(i => parseFloat(i.price?.value)).filter(p => !isNaN(p) && p > 0);
-    if (prices.length === 0) return res.json({ flips: [], avgSoldPrice: 0, soldCount: 0 });
+    const priced = items
+      .map(i => ({ ...i, numPrice: parseFloat(i.price?.value) }))
+      .filter(i => !isNaN(i.numPrice) && i.numPrice > 0)
+      .sort((a, b) => a.numPrice - b.numPrice);
 
-    const avgPrice = prices.reduce((a, b) => a + b, 0) / prices.length;
-    const medianPrice = prices.sort((a, b) => a - b)[Math.floor(prices.length / 2)];
+    const prices = priced.map(i => i.numPrice);
+    const median = prices[Math.floor(prices.length / 2)];
+    const avg = prices.reduce((a, b) => a + b, 0) / prices.length;
+    // Use the upper 40% of listings as the "sell target" — what patient sellers get
+    const upperQuartileIndex = Math.floor(prices.length * 0.6);
+    const sellTarget = prices[upperQuartileIndex] || avg;
 
-    // Show listings that are at least 10% below the median (much looser threshold)
-    const flipThreshold = medianPrice * 0.90;
+    // Flips = bottom 40% of listings that are at least 8% below sell target
+    const flipCutoff = sellTarget * 0.92;
+    const flips = priced
+      .filter(i => i.numPrice <= flipCutoff)
+      .map(i => ({
+        title: i.title,
+        listPrice: i.numPrice.toFixed(2),
+        avgSoldPrice: sellTarget.toFixed(2),
+        estimatedProfit: (sellTarget - i.numPrice).toFixed(2),
+        profitPct: Math.round(((sellTarget - i.numPrice) / i.numPrice) * 100),
+        url: i.itemWebUrl,
+        image: i.image?.imageUrl,
+        condition: i.condition,
+      }));
 
-    const flips = items
-      .filter(item => {
-        const p = parseFloat(item.price?.value);
-        return !isNaN(p) && p > 0 && p <= flipThreshold;
-      })
-      .map(item => {
-        const buyPrice = parseFloat(item.price?.value);
-        const estimatedProfit = medianPrice - buyPrice;
-        const profitPct = Math.round((estimatedProfit / buyPrice) * 100);
-        return {
-          title: item.title,
-          listPrice: buyPrice.toFixed(2),
-          avgSoldPrice: medianPrice.toFixed(2),
-          estimatedProfit: estimatedProfit.toFixed(2),
-          profitPct,
-          url: item.itemWebUrl,
-          image: item.image?.imageUrl,
-          condition: item.condition,
-        };
-      })
-      .filter(f => f.profitPct > 5); // at least 5% profit
+    // Also return ALL listings so frontend can show market overview
+    const allListings = priced.slice(0, 10).map(i => ({
+      title: i.title,
+      listPrice: i.numPrice.toFixed(2),
+      url: i.itemWebUrl,
+      image: i.image?.imageUrl,
+      condition: i.condition,
+    }));
 
-    res.json({ flips, avgSoldPrice: medianPrice.toFixed(2), soldCount: prices.length });
+    res.json({
+      flips,
+      allListings,
+      avgSoldPrice: sellTarget.toFixed(2),
+      medianPrice: median.toFixed(2),
+      soldCount: prices.length,
+      priceRange: { low: prices[0].toFixed(2), high: prices[prices.length - 1].toFixed(2) },
+    });
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: err.message });
@@ -85,3 +97,4 @@ app.get("/", (req, res) => res.send("CardFlip AI backend is running!"));
 
 const PORT = process.env.PORT || 3001;
 app.listen(PORT, () => console.log(`CardFlip backend running on port ${PORT}`));
+// appended marker
