@@ -55,47 +55,16 @@ app.get("/api/flip", async (req, res) => {
     const upperQuartileIndex = Math.floor(prices.length * 0.6);
     const sellTarget = prices[upperQuartileIndex] || avg;
 
-    // Flips = bottom 40% of listings that are at least 8% below sell target
-    const flipCutoff = sellTarget * 0.92;
+    // Flips = ANY listing below the median price
     const flips = priced
-      .filter(i => i.numPrice <= flipCutoff)
+      .filter(i => i.numPrice < median)
       .map(i => ({
         title: i.title,
         listPrice: i.numPrice.toFixed(2),
-        avgSoldPrice: sellTarget.toFixed(2),
-        estimatedProfit: (sellTarget - i.numPrice).toFixed(2),
-        profitPct: Math.round(((sellTarget - i.numPrice) / i.numPrice) * 100),
+        avgSoldPrice: median.toFixed(2),
+        estimatedProfit: (median - i.numPrice).toFixed(2),
+        profitPct: Math.round(((median - i.numPrice) / i.numPrice) * 100),
         url: i.itemWebUrl,
         image: i.image?.imageUrl,
         condition: i.condition,
       }));
-
-    // Also return ALL listings so frontend can show market overview
-    const allListings = priced.slice(0, 10).map(i => ({
-      title: i.title,
-      listPrice: i.numPrice.toFixed(2),
-      url: i.itemWebUrl,
-      image: i.image?.imageUrl,
-      condition: i.condition,
-    }));
-
-    res.json({
-      flips,
-      allListings,
-      avgSoldPrice: sellTarget.toFixed(2),
-      medianPrice: median.toFixed(2),
-      soldCount: prices.length,
-      priceRange: { low: prices[0].toFixed(2), high: prices[prices.length - 1].toFixed(2) },
-    });
-  } catch (err) {
-    console.error(err);
-    res.status(500).json({ error: err.message });
-  }
-});
-
-app.get("/", (req, res) => res.send("CardFlip AI backend is running!"));
-
-const PORT = process.env.PORT || 8080;
-
-app.listen(PORT, () => console.log(`CardFlip backend running on port ${PORT}`));
-// appended marker
