@@ -95,7 +95,7 @@ app.get("/api/flip", async (req, res) => {
 
 app.get("/", (req, res) => res.send("CardFlip AI backend is running!"));
 
-const PORT = process.env.PORT || 80;
+const PORT = process.env.PORT || 8080;
 
 app.listen(PORT, () => console.log(`CardFlip backend running on port ${PORT}`));
 // appended marker
