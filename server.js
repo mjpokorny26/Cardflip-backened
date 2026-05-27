@@ -125,28 +125,52 @@ app.get("/api/flip", async (req, res) => {
       return res.json({ flips: [], avgSoldPrice: "0", soldCount: 0 });
     }
 
-    // Only show flips where:
-    // 1. Listed price is below the real sold median
-    // 2. The discount is meaningful (at least 10%)
-    // 3. The profit is at least $2 (eliminates $0.99 vs $1.10 nonsense)
-    // 4. Title roughly matches the search query (eliminates wrong cards)
-    const queryWords = query.toLowerCase().split(" ").filter(w => w.length > 2);
+    // Suspicious keywords that indicate bulk/wrong listings
+    const JUNK_KEYWORDS = ["you pick", "pick your", "lot ", "reprint", "custom", "express lane", "choose your", "complete your set", "pick one", "mystery", "wholesale", "bundle"];
+
+    // Grading keywords — if search contains one, listing must too
+    const GRADE_KEYWORDS = ["psa", "bgs", "sgc", "cgc", "beckett"];
+
+    const queryLower = query.toLowerCase();
+    const queryWords = queryLower.split(" ").filter(w => w.length > 2);
+
+    // Extract the most important word (likely player last name — longest word)
+    const keyWord = queryWords.sort((a, b) => b.length - a.length)[0];
+
+    // Check if search includes a grading keyword
+    const searchHasGrade = GRADE_KEYWORDS.some(g => queryLower.includes(g));
 
     const flips = activeItems
       .filter(item => {
         const price = parseFloat(item.price?.value);
+        const title = (item.title || "").toLowerCase();
+
         if (isNaN(price) || price <= 0) return false;
+
+        // Minimum $5 listing price
+        if (price < 5) return false;
 
         // Must be below target price by at least 10%
         if (price >= targetPrice * 0.90) return false;
 
-        // Profit must be at least $2
-        if (targetPrice - price < 2) return false;
+        // Profit must be at least $3
+        if (targetPrice - price < 3) return false;
 
-        // Title must contain at least 50% of query words
-        const title = item.title?.toLowerCase() || "";
+        // Profit % must be under 80% — anything higher is almost certainly wrong card
+        if ((targetPrice - price) / price > 0.80) return false;
+
+        // Must contain the key search word (e.g. player last name)
+        if (keyWord && !title.includes(keyWord)) return false;
+
+        // If search has a grade, listing must have a grade too
+        if (searchHasGrade && !GRADE_KEYWORDS.some(g => title.includes(g))) return false;
+
+        // Eliminate junk/bulk listings
+        if (JUNK_KEYWORDS.some(k => title.includes(k))) return false;
+
+        // Title must contain at least 60% of query words
         const matchedWords = queryWords.filter(w => title.includes(w));
-        if (matchedWords.length / queryWords.length < 0.5) return false;
+        if (matchedWords.length / queryWords.length < 0.6) return false;
 
         return true;
       })
