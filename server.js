@@ -34,31 +34,18 @@ async function getActiveListings(token, query) {
 
 // Get REAL sold prices via Finding API (GET method - simpler and more reliable)
 async function getRealSoldPrices(query) {
-  const params = new URLSearchParams({
-    "OPERATION-NAME": "findCompletedItems",
-    "SERVICE-VERSION": "1.0.0",
-    "SECURITY-APPNAME": CLIENT_ID,
-    "RESPONSE-DATA-FORMAT": "JSON",
-    "keywords": query,
-    "itemFilter(0).name": "SoldItemsOnly",
-    "itemFilter(0).value": "true",
-    "itemFilter(1).name": "ListingType",
-    "itemFilter(1).value": "FixedPrice",
-    "paginationInput.entriesPerPage": "50",
-    "sortOrder": "EndTimeSoonest",
-  });
-
-  const url = `https://svcs.ebay.com/services/search/FindingService/v1?${params.toString()}`;
-  const res = await fetch(url);
-  const data = await res.json();
-
   try {
-    const items = data.findCompletedItemsResponse[0].searchResult[0].item || [];
-    return items.map(i => ({
-      title: i.title[0],
-      price: parseFloat(i.sellingStatus[0].currentPrice[0].__value__),
-    })).filter(i => !isNaN(i.price) && i.price > 0);
-  } catch {
+    const encodedQuery = encodeURIComponent(query);
+    const appId = encodeURIComponent(CLIENT_ID);
+    const url = `https://svcs.ebay.com/services/search/FindingService/v1?OPERATION-NAME=findCompletedItems&SERVICE-VERSION=1.0.0&SECURITY-APPNAME=${appId}&RESPONSE-DATA-FORMAT=JSON&keywords=${encodedQuery}&itemFilter%280%29.name=SoldItemsOnly&itemFilter%280%29.value=true&itemFilter%281%29.name=ListingType&itemFilter%281%29.value=FixedPrice&paginationInput.entriesPerPage=50&sortOrder=EndTimeSoonest`;
+    const res = await fetch(url);
+    const text = await res.text();
+    const data = JSON.parse(text);
+    const items = data?.findCompletedItemsResponse?.[0]?.searchResult?.[0]?.item || [];
+    console.log(`Finding API: ${items.length} sold for "${query}"`);
+    return items.map(i => ({ title: i.title?.[0] || "", price: parseFloat(i.sellingStatus?.[0]?.currentPrice?.[0]?.__value__ || "0") })).filter(i => !isNaN(i.price) && i.price > 0);
+  } catch(e) {
+    console.error("Finding API error:", e.message);
     return [];
   }
 }
