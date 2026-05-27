@@ -31,92 +31,107 @@ const JUNK_KEYWORDS = [
   "express lane", "complete your set",
   "mystery", "surprise", "random", "blind",
   "break", "case break", "box break",
-  "qty", "quantity", "bulk",
-  "case", "sealed", "pack",
-  "panini direct", "fanatics"
+  "qty", "quantity", "bulk", "sealed", "pack",
+  "panini direct", "fanatics",
+  "non auto", "no auto", "non-auto", "without auto",
+  "no patch", "non patch", "without patch",
+  "base only", "no rpa",
 ];
 
 const GRADE_KEYWORDS = ["psa", "bgs", "sgc", "cgc", "beckett"];
-
-const BRANDS = [
-  "prizm", "topps chrome", "bowman chrome", "donruss optic",
-  "optic", "mosaic", "select", "national treasures",
-  "flawless", "immaculate", "spectra", "contenders",
-  "hoops", "upper deck", "bowman", "topps"
-];
-
-const INSERTS = [
-  "silver", "gold", "red", "blue", "green", "purple",
-  "orange", "pink", "black", "white", "holo",
-  "refractor", "auto", "autograph", "patch", "rpa",
-  "hyper", "neon", "disco", "shimmer", "tiger",
-  "wave", "fast break", "choice", "cracked ice"
-];
+const BRANDS = ["prizm", "topps chrome", "bowman chrome", "donruss optic", "optic", "mosaic", "select", "national treasures", "flawless", "immaculate", "spectra", "contenders", "hoops", "upper deck", "bowman", "topps"];
+const INSERTS = ["silver", "gold", "red", "blue", "green", "purple", "orange", "pink", "black", "white", "holo", "refractor", "auto", "autograph", "patch", "rpa", "hyper", "neon", "disco", "shimmer", "cracked ice"];
 
 function strictFilter(items, query) {
   const queryLower = query.toLowerCase();
   const queryWords = queryLower.split(" ").filter(w => w.length > 2);
 
-  // Extract all components from query
   const searchBrand = BRANDS.find(b => queryLower.includes(b));
   const searchInserts = INSERTS.filter(i => queryLower.includes(i));
   const gradeKeyword = GRADE_KEYWORDS.find(g => queryLower.includes(g));
   const gradeNumber = queryLower.match(/\b(10|9\.5|9|8\.5|8)\b/)?.[0];
   const yearMatch = query.match(/\b(20\d{2}|19\d{2})\b/)?.[0];
+  const searchingAuto = queryLower.includes("auto");
+  const searchingPatch = queryLower.includes("patch");
 
-  // Extract player name words (non-brand, non-insert, non-grade, non-year words)
-  const stopWords = ["card", "and", "the", "with", "for", "base", "gem", "mint", "rc", "rookie", ...GRADE_KEYWORDS];
+  const stopWords = ["card", "and", "the", "with", "for", "base", "gem", "mint", "rc", ...GRADE_KEYWORDS];
   const playerWords = queryWords.filter(w =>
     !stopWords.includes(w) &&
-    !BRANDS.some(b => b.includes(w)) &&
+    !BRANDS.some(b => b.split(" ").includes(w)) &&
     !INSERTS.includes(w) &&
     !GRADE_KEYWORDS.includes(w) &&
     !/^\d+$/.test(w)
   );
-
-  // The most important player word (longest = most unique, e.g. "wembanyama" vs "victor")
   const primaryPlayerWord = playerWords.sort((a, b) => b.length - a.length)[0];
 
   return items.filter(item => {
     const price = parseFloat(item.price?.value);
     const title = (item.title || "").toLowerCase();
 
-    // Price sanity
     if (isNaN(price) || price < 5) return false;
 
-    // No junk listings
+    // Reject all junk listings
     if (JUNK_KEYWORDS.some(k => title.includes(k))) return false;
 
-    // Title must not be keyword-stuffed
+    // Reject keyword-stuffed titles
     if (title.length > 120) return false;
 
-    // PLAYER: primary player word MUST be in title
+    // Player name must appear
     if (primaryPlayerWord && !title.includes(primaryPlayerWord)) return false;
 
-    // BRAND: must be exact match — "prizm" listing must say "prizm"
+    // Brand must match exactly
     if (searchBrand && !title.includes(searchBrand)) return false;
 
-    // INSERTS: ALL insert keywords from search must appear in listing title
-    // e.g. "silver prizm" → title must contain "silver"
-    // e.g. "gold auto patch" → title must contain "gold", "auto", "patch"
+    // ALL inserts must match with word boundary — zero tolerance
     if (searchInserts.length > 0) {
-      const missingInserts = searchInserts.filter(ins => !title.includes(ins));
-      if (missingInserts.length > 0) return false; // ZERO tolerance — all inserts must match
+      for (const ins of searchInserts) {
+        if (!new RegExp(`\\b${ins}\\b`).test(title)) return false;
+      }
     }
 
-    // GRADE: if searching PSA, listing must say PSA
+    // If searching silver — reject listings with conflicting parallels
+    if (searchInserts.includes("silver")) {
+      const conflicts = ["gold", "red", "blue", "green", "purple", "orange", "pink", "black", "bronze", "copper", "yellow", "teal", "hyper", "neon", "disco", "shimmer", "cracked ice"];
+      if (conflicts.some(p => new RegExp(`\\b${p}\\b`).test(title))) return false;
+    }
+
+    // If searching gold — reject other parallels
+    if (searchInserts.includes("gold")) {
+      const conflicts = ["silver", "red", "blue", "green", "purple", "orange", "pink", "black", "bronze"];
+      if (conflicts.some(p => new RegExp(`\\b${p}\\b`).test(title))) return false;
+    }
+
+    // If searching refractor without a color — reject colored refractors
+    if (searchInserts.includes("refractor") && !["gold","red","blue","green","purple","orange","black"].some(c => searchInserts.includes(c))) {
+      if (/\b(gold|red|blue|green|purple|orange|pink|black|atomic|prizm) refractor\b/.test(title)) return false;
+    }
+
+    // Auto must be genuine — reject negations
+    if (searchingAuto) {
+      if (!title.includes("auto")) return false;
+      if (["non auto","no auto","non-auto","without auto","unsigned","not signed"].some(k => title.includes(k))) return false;
+    }
+
+    // Patch must be genuine
+    if (searchingPatch) {
+      if (!title.includes("patch")) return false;
+      if (["no patch","non patch","without patch"].some(k => title.includes(k))) return false;
+    }
+
+
+    // Grade must match
     if (gradeKeyword && !title.includes(gradeKeyword)) return false;
 
-    // GRADE NUMBER: must match exactly — no PSA 9 when searching PSA 10
+    // Grade number exact match
     if (gradeNumber && !new RegExp(`\\b${gradeNumber}\\b`).test(title)) return false;
 
-    // YEAR: must be within 1 year (not 2 — stricter)
+    // Year within 1 year
     if (yearMatch) {
       const sy = parseInt(yearMatch);
       const titleYears = [...title.matchAll(/\b(19|20)\d{2}\b/g)].map(m => parseInt(m[0]));
       if (titleYears.length > 0) {
         const closest = titleYears.reduce((a, b) => Math.abs(b - sy) < Math.abs(a - sy) ? b : a);
-        if (Math.abs(closest - sy) > 1) return false; // within 1 year only
+        if (Math.abs(closest - sy) > 1) return false;
       }
     }
 
@@ -132,16 +147,11 @@ async function getSpread(token, query) {
   if (rawItems.length === 0) return null;
 
   const filtered = strictFilter(rawItems, query);
-
-  // Need at least 4 listings to calculate a meaningful spread
   if (filtered.length < 4) return null;
 
   const prices = filtered.map(i => parseFloat(i.price?.value)).sort((a, b) => a - b);
-
-  // Remove outliers — ignore bottom 10% and top 10% prices
   const trimCount = Math.max(1, Math.floor(prices.length * 0.1));
   const trimmedPrices = prices.slice(trimCount, prices.length - trimCount);
-
   if (trimmedPrices.length < 3) return null;
 
   const low = trimmedPrices[0];
@@ -149,10 +159,7 @@ async function getSpread(token, query) {
   const spread = high - low;
   const spreadPct = Math.round((spread / low) * 100);
 
-  // Minimum 25% spread to show as a deal
   if (spreadPct < 25) return null;
-
-  // Minimum $8 dollar spread — eliminates cheap card noise
   if (spread < 8) return null;
 
   const cheapest = filtered
@@ -173,13 +180,7 @@ async function getSpread(token, query) {
 
   return {
     query,
-    priceRange: {
-      low: low.toFixed(2),
-      high: high.toFixed(2),
-      spread: spread.toFixed(2),
-      spreadPct,
-      count: filtered.length,
-    },
+    priceRange: { low: low.toFixed(2), high: high.toFixed(2), spread: spread.toFixed(2), spreadPct, count: filtered.length },
     cheapest,
     soldSearchUrl: `https://www.ebay.com/sch/i.html?_nkw=${encodeURIComponent(query)}&LH_Sold=1&LH_Complete=1`,
   };
@@ -211,16 +212,16 @@ const SCAN_CATEGORIES = {
     "2023 Panini Prizm Jaxon Smith-Njigba Silver PSA 10",
   ],
   baseball: [
-    "2022 Bowman Chrome Julio Rodriguez auto refractor",
-    "2023 Bowman Chrome Jackson Holliday auto refractor",
-    "2022 Bowman Chrome Gunnar Henderson auto refractor",
+    "2022 Bowman Chrome Julio Rodriguez auto refractor PSA",
+    "2022 Bowman Chrome Gunnar Henderson auto refractor PSA",
     "2023 Topps Chrome Corbin Carroll auto refractor",
-    "2023 Bowman Chrome Dylan Crews auto refractor",
     "2022 Topps Chrome Julio Rodriguez PSA 10",
     "2023 Bowman Chrome Paul Skenes auto refractor",
     "2023 Topps Chrome Gunnar Henderson PSA 10",
     "2022 Bowman Chrome Jeremy Pena auto refractor",
     "2023 Topps Chrome Ronald Acuna PSA 10",
+    "2022 Bowman Chrome Bobby Miller auto refractor",
+    "2023 Bowman Chrome Dylan Crews auto refractor",
   ],
   hockey: [
     "2022 Upper Deck Young Guns Connor Bedard PSA 10",
@@ -238,21 +239,17 @@ const SCAN_CATEGORIES = {
 
 app.get("/api/scan", async (req, res) => {
   const { sport } = req.query;
-  if (!sport || !SCAN_CATEGORIES[sport]) {
-    return res.status(400).json({ error: "Invalid sport" });
-  }
+  if (!sport || !SCAN_CATEGORIES[sport]) return res.status(400).json({ error: "Invalid sport" });
   try {
     const token = await getEbayToken();
-    const queries = SCAN_CATEGORIES[sport];
     const deals = [];
-    for (const query of queries) {
+    for (const query of SCAN_CATEGORIES[sport]) {
       const result = await getSpread(token, query);
       if (result) deals.push(result);
     }
     deals.sort((a, b) => b.priceRange.spreadPct - a.priceRange.spreadPct);
     res.json({ deals, sport, total: deals.length });
   } catch (err) {
-    console.error(err);
     res.status(500).json({ error: err.message });
   }
 });
