@@ -125,20 +125,24 @@ app.get("/api/flip", async (req, res) => {
       return res.json({ flips: [], avgSoldPrice: "0", soldCount: 0 });
     }
 
-    // Suspicious keywords that indicate bulk/wrong listings
-    const JUNK_KEYWORDS = ["you pick", "pick your", "lot ", "reprint", "custom", "express lane", "choose your", "complete your set", "pick one", "mystery", "wholesale", "bundle"];
-
-    // Grading keywords — if search contains one, listing must too
+    const JUNK_KEYWORDS = ["you pick", "pick your", "lot of", "reprint", "custom made", "express lane", "choose your", "complete your set", "pick one", "mystery", "wholesale", "bundle of", "random", "surprise", "blind", "multi", "break", "case", "box", "pack", "panini direct", "qty", "quantity"];
     const GRADE_KEYWORDS = ["psa", "bgs", "sgc", "cgc", "beckett"];
 
     const queryLower = query.toLowerCase();
     const queryWords = queryLower.split(" ").filter(w => w.length > 2);
-
-    // Extract the most important word (likely player last name — longest word)
-    const keyWord = queryWords.sort((a, b) => b.length - a.length)[0];
-
-    // Check if search includes a grading keyword
     const searchHasGrade = GRADE_KEYWORDS.some(g => queryLower.includes(g));
+
+    // Top 3 most specific words must ALL appear in title
+    const significantWords = queryWords
+      .filter(w => !["card", "and", "the", "with", "for", "base", "gem", "mint"].includes(w))
+      .sort((a, b) => b.length - a.length);
+    const mustMatchWords = significantWords.slice(0, 3);
+
+    // Extract grade number if present (e.g. "10" from "PSA 10")
+    const gradeNumber = queryLower.match(/\b(10|9\.5|9|8\.5|8)\b/)?.[0];
+
+    // Extract year if present in search (e.g. "2019")
+    const yearMatch = query.match(/\b(19|20)\d{2}\b/)?.[0];
 
     const flips = activeItems
       .filter(item => {
@@ -147,30 +151,48 @@ app.get("/api/flip", async (req, res) => {
 
         if (isNaN(price) || price <= 0) return false;
 
-        // Minimum $5 listing price
+        // Minimum $5
         if (price < 5) return false;
 
-        // Must be below target price by at least 10%
-        if (price >= targetPrice * 0.90) return false;
+        // Must be at least 12% below target
+        if (price >= targetPrice * 0.88) return false;
 
-        // Profit must be at least $3
-        if (targetPrice - price < 3) return false;
+        // Profit must be at least $4
+        if (targetPrice - price < 4) return false;
 
-        // Profit % must be under 80% — anything higher is almost certainly wrong card
-        if ((targetPrice - price) / price > 0.80) return false;
+        // Hard cap at 95% profit
+        if ((targetPrice - price) / price > 0.95) return false;
 
-        // Must contain the key search word (e.g. player last name)
-        if (keyWord && !title.includes(keyWord)) return false;
-
-        // If search has a grade, listing must have a grade too
+        // Grade keyword must appear if searched
         if (searchHasGrade && !GRADE_KEYWORDS.some(g => title.includes(g))) return false;
 
-        // Eliminate junk/bulk listings
+        // Grade NUMBER must match exactly if present
+        if (gradeNumber && !title.includes(gradeNumber)) return false;
+
+        // If year is in search, listing must be within 2 years of it
+        if (yearMatch) {
+          const searchYear = parseInt(yearMatch);
+          const titleYears = [...title.matchAll(/\b(19|20)\d{2}\b/g)].map(m => parseInt(m[0]));
+          if (titleYears.length > 0) {
+            const closestYear = titleYears.reduce((a, b) => Math.abs(b - searchYear) < Math.abs(a - searchYear) ? b : a);
+            if (Math.abs(closestYear - searchYear) > 2) return false;
+          }
+        }
+
+        // Must be a single card — "Graded" or "New" condition strongly preferred
+        // Reject clearly multi-item conditions
+        const condition = (item.condition || "").toLowerCase();
+        if (condition.includes("not specified") && price < 15) return false;
+
+        // All junk keywords eliminate the listing
         if (JUNK_KEYWORDS.some(k => title.includes(k))) return false;
 
-        // Title must contain at least 60% of query words
-        const matchedWords = queryWords.filter(w => title.includes(w));
-        if (matchedWords.length / queryWords.length < 0.6) return false;
+        // Top 3 most specific search words must all appear in title
+        if (!mustMatchWords.every(w => title.includes(w))) return false;
+
+        // Title must not be WAY longer than expected (listing stuffed with keywords)
+        // A normal card title is under 100 chars, keyword-stuffed ones are 200+
+        if (title.length > 150) return false;
 
         return true;
       })
