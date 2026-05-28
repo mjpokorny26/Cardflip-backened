@@ -150,7 +150,7 @@ async function getSpread(token, query) {
   if (filtered.length < 4) return null;
 
   const prices = filtered.map(i => parseFloat(i.price?.value)).sort((a, b) => a - b);
-  const trimCount = Math.max(1, Math.floor(prices.length * 0.1));
+  const trimCount = Math.max(1, Math.floor(prices.length * 0.20));
   const trimmedPrices = prices.slice(trimCount, prices.length - trimCount);
   if (trimmedPrices.length < 3) return null;
 
@@ -159,8 +159,11 @@ async function getSpread(token, query) {
   const spread = high - low;
   const spreadPct = Math.round((spread / low) * 100);
 
-  if (spreadPct < 25) return null;
+  if (spreadPct < 20) return null;
   if (spread < 8) return null;
+
+  // MAX spread cap — over 70% means different cards are mixed in
+  if (spreadPct > 70) return null;
 
   const cheapest = filtered
     .sort((a, b) => parseFloat(a.price?.value) - parseFloat(b.price?.value))
