@@ -24,6 +24,38 @@ async function getEbayToken() {
   return data.access_token;
 }
 
+// ─── EXACT SET NAME DEFINITIONS ───────────────────────────────────────────────
+// These are the EXACT strings that must appear in the title for each set.
+// "Panini Prizm" will NOT match "Prizm Draft Picks" or "Donruss Optic Prizm"
+const EXACT_SETS = {
+  "panini prizm":         { must: ["prizm"], mustNot: ["draft picks", "draft pick", "donruss", "optic", "contenders", "select", "mosaic", "chronicles", "hoops", "spectra", "national treasures", "immaculate", "flawless"] },
+  "prizm draft picks":    { must: ["prizm", "draft picks"], mustNot: [] },
+  "bowman chrome":        { must: ["bowman chrome"], mustNot: ["topps chrome", "bowman platinum", "bowman sterling"] },
+  "topps chrome":         { must: ["topps chrome"], mustNot: ["bowman chrome", "topps chrome update"] },
+  "donruss optic":        { must: ["optic"], mustNot: ["prizm", "select", "mosaic"] },
+  "panini select":        { must: ["select"], mustNot: ["prizm", "optic", "donruss"] },
+  "panini mosaic":        { must: ["mosaic"], mustNot: ["prizm", "optic", "select"] },
+  "upper deck":           { must: ["upper deck"], mustNot: [] },
+  "national treasures":   { must: ["national treasures"], mustNot: [] },
+  "panini contenders":    { must: ["contenders"], mustNot: ["optic contenders"] },
+};
+
+// ─── EXACT PARALLEL DEFINITIONS ───────────────────────────────────────────────
+// When searching a specific parallel, ONLY that parallel is allowed.
+// All competing parallels are rejected.
+const PARALLEL_CONFLICTS = {
+  "silver":       ["gold", "red", "blue", "green", "purple", "orange", "pink", "black", "bronze", "copper", "yellow", "teal", "hyper", "neon", "disco", "shimmer", "cracked ice", "tiger", "wave", "aqua", "ruby", "emerald", "sapphire"],
+  "gold":         ["silver", "red", "blue", "green", "purple", "orange", "pink", "black", "bronze"],
+  "red":          ["silver", "gold", "blue", "green", "purple", "orange", "pink", "black"],
+  "blue":         ["silver", "gold", "red", "green", "purple", "orange", "pink", "black"],
+  "green":        ["silver", "gold", "red", "blue", "purple", "orange", "pink", "black"],
+  "purple":       ["silver", "gold", "red", "blue", "green", "orange", "pink", "black"],
+  "orange":       ["silver", "gold", "red", "blue", "green", "purple", "pink", "black"],
+  "black":        ["silver", "gold", "red", "blue", "green", "purple", "orange", "pink"],
+  "hyper":        ["silver", "gold", "red", "blue", "green", "purple", "orange", "pink", "black"],
+  "neon":         ["silver", "gold", "red", "blue", "green", "purple", "orange", "pink", "black"],
+};
+
 const JUNK_KEYWORDS = [
   "you pick", "pick your", "pick one", "choose your",
   "lot of", "bundle of", "multi", "wholesale",
@@ -35,97 +67,86 @@ const JUNK_KEYWORDS = [
   "panini direct", "fanatics",
   "non auto", "no auto", "non-auto", "without auto",
   "no patch", "non patch", "without patch",
-  "base only", "no rpa",
+  "base only", "unsigned", "not signed",
 ];
 
-const GRADE_KEYWORDS = ["psa", "bgs", "sgc", "cgc", "beckett"];
-const BRANDS = ["prizm", "topps chrome", "bowman chrome", "donruss optic", "optic", "mosaic", "select", "national treasures", "flawless", "immaculate", "spectra", "contenders", "hoops", "upper deck", "bowman", "topps"];
-const INSERTS = ["silver", "gold", "red", "blue", "green", "purple", "orange", "pink", "black", "white", "holo", "refractor", "auto", "autograph", "patch", "rpa", "hyper", "neon", "disco", "shimmer", "cracked ice"];
+const GRADE_KEYWORDS = ["psa", "bgs", "sgc", "cgc"];
 
 function strictFilter(items, query) {
   const queryLower = query.toLowerCase();
-  const queryWords = queryLower.split(" ").filter(w => w.length > 2);
 
-  const searchBrand = BRANDS.find(b => queryLower.includes(b));
-  const searchInserts = INSERTS.filter(i => queryLower.includes(i));
+  // ── Detect what the search is asking for ──────────────────────────────────
+
+  // Find exact set from query
+  const matchedSet = Object.entries(EXACT_SETS).find(([name]) => queryLower.includes(name));
+  const setRules = matchedSet ? matchedSet[1] : null;
+
+  // Find parallel from query
+  const searchedParallel = Object.keys(PARALLEL_CONFLICTS).find(p => new RegExp(`\\b${p}\\b`).test(queryLower));
+  const conflictingParallels = searchedParallel ? PARALLEL_CONFLICTS[searchedParallel] : [];
+
+  // Grade detection
   const gradeKeyword = GRADE_KEYWORDS.find(g => queryLower.includes(g));
   const gradeNumber = queryLower.match(/\b(10|9\.5|9|8\.5|8)\b/)?.[0];
-  const yearMatch = query.match(/\b(20\d{2}|19\d{2})\b/)?.[0];
-  const searchingAuto = queryLower.includes("auto");
-  const searchingPatch = queryLower.includes("patch");
 
-  const stopWords = ["card", "and", "the", "with", "for", "base", "gem", "mint", "rc", ...GRADE_KEYWORDS];
-  const playerWords = queryWords.filter(w =>
-    !stopWords.includes(w) &&
-    !BRANDS.some(b => b.split(" ").includes(w)) &&
-    !INSERTS.includes(w) &&
-    !GRADE_KEYWORDS.includes(w) &&
-    !/^\d+$/.test(w)
-  );
+  // Year detection
+  const yearMatch = query.match(/\b(20\d{2}|19\d{2})\b/)?.[0];
+
+  // Auto/patch detection
+  const searchingAuto = queryLower.includes("auto");
+  const searchingPatch = queryLower.includes("patch") || queryLower.includes("rpa");
+
+  // Player name — longest non-keyword word in query
+  const skipWords = ["panini", "topps", "bowman", "upper", "deck", "prizm", "chrome", "optic",
+    "select", "mosaic", "silver", "gold", "auto", "patch", "refractor", "draft", "picks",
+    "psa", "bgs", "sgc", "gem", "mint", "card", "the", "and", "with", "for", "base", "rpa"];
+  const playerWords = queryLower.split(" ")
+    .filter(w => w.length > 3 && !skipWords.includes(w) && !/^\d+$/.test(w));
   const primaryPlayerWord = playerWords.sort((a, b) => b.length - a.length)[0];
 
   return items.filter(item => {
     const price = parseFloat(item.price?.value);
     const title = (item.title || "").toLowerCase();
 
+    // ── Basic sanity ─────────────────────────────────────────────────────────
     if (isNaN(price) || price < 5) return false;
-
-    // Reject all junk listings
+    if (title.length > 130) return false;
     if (JUNK_KEYWORDS.some(k => title.includes(k))) return false;
 
-    // Reject keyword-stuffed titles
-    if (title.length > 120) return false;
-
-    // Player name must appear
+    // ── Player name must appear ───────────────────────────────────────────────
     if (primaryPlayerWord && !title.includes(primaryPlayerWord)) return false;
 
-    // Brand must match exactly
-    if (searchBrand && !title.includes(searchBrand)) return false;
-
-    // ALL inserts must match with word boundary — zero tolerance
-    if (searchInserts.length > 0) {
-      for (const ins of searchInserts) {
-        if (!new RegExp(`\\b${ins}\\b`).test(title)) return false;
-      }
+    // ── EXACT SET matching ────────────────────────────────────────────────────
+    if (setRules) {
+      // All "must" words must be in title
+      if (setRules.must.some(w => !title.includes(w))) return false;
+      // None of the "mustNot" words can be in title
+      if (setRules.mustNot.some(w => title.includes(w))) return false;
     }
 
-    // If searching silver — reject listings with conflicting parallels
-    if (searchInserts.includes("silver")) {
-      const conflicts = ["gold", "red", "blue", "green", "purple", "orange", "pink", "black", "bronze", "copper", "yellow", "teal", "hyper", "neon", "disco", "shimmer", "cracked ice"];
-      if (conflicts.some(p => new RegExp(`\\b${p}\\b`).test(title))) return false;
-    }
+    // ── PARALLEL matching ─────────────────────────────────────────────────────
+    // Searched parallel must appear as a whole word
+    if (searchedParallel && !new RegExp(`\\b${searchedParallel}\\b`).test(title)) return false;
+    // Conflicting parallels must NOT appear
+    if (conflictingParallels.some(p => new RegExp(`\\b${p}\\b`).test(title))) return false;
 
-    // If searching gold — reject other parallels
-    if (searchInserts.includes("gold")) {
-      const conflicts = ["silver", "red", "blue", "green", "purple", "orange", "pink", "black", "bronze"];
-      if (conflicts.some(p => new RegExp(`\\b${p}\\b`).test(title))) return false;
-    }
-
-    // If searching refractor without a color — reject colored refractors
-    if (searchInserts.includes("refractor") && !["gold","red","blue","green","purple","orange","black"].some(c => searchInserts.includes(c))) {
-      if (/\b(gold|red|blue|green|purple|orange|pink|black|atomic|prizm) refractor\b/.test(title)) return false;
-    }
-
-    // Auto must be genuine — reject negations
+    // ── AUTO matching ─────────────────────────────────────────────────────────
     if (searchingAuto) {
       if (!title.includes("auto")) return false;
       if (["non auto","no auto","non-auto","without auto","unsigned","not signed"].some(k => title.includes(k))) return false;
     }
 
-    // Patch must be genuine
+    // ── PATCH matching ────────────────────────────────────────────────────────
     if (searchingPatch) {
-      if (!title.includes("patch")) return false;
+      if (!title.includes("patch") && !title.includes("rpa")) return false;
       if (["no patch","non patch","without patch"].some(k => title.includes(k))) return false;
     }
 
-
-    // Grade must match
+    // ── GRADE matching ────────────────────────────────────────────────────────
     if (gradeKeyword && !title.includes(gradeKeyword)) return false;
-
-    // Grade number exact match
     if (gradeNumber && !new RegExp(`\\b${gradeNumber}\\b`).test(title)) return false;
 
-    // Year within 1 year
+    // ── YEAR matching ─────────────────────────────────────────────────────────
     if (yearMatch) {
       const sy = parseInt(yearMatch);
       const titleYears = [...title.matchAll(/\b(19|20)\d{2}\b/g)].map(m => parseInt(m[0]));
@@ -150,6 +171,8 @@ async function getSpread(token, query) {
   if (filtered.length < 4) return null;
 
   const prices = filtered.map(i => parseFloat(i.price?.value)).sort((a, b) => a - b);
+
+  // Remove top and bottom 20% as outliers
   const trimCount = Math.max(1, Math.floor(prices.length * 0.20));
   const trimmedPrices = prices.slice(trimCount, prices.length - trimCount);
   if (trimmedPrices.length < 3) return null;
@@ -159,10 +182,11 @@ async function getSpread(token, query) {
   const spread = high - low;
   const spreadPct = Math.round((spread / low) * 100);
 
+  // Must be at least 20% spread and $8 gap
   if (spreadPct < 20) return null;
   if (spread < 8) return null;
 
-  // MAX spread cap — over 70% means different cards are mixed in
+  // Hard cap — over 70% spread means different cards are mixed in
   if (spreadPct > 70) return null;
 
   const cheapest = filtered
@@ -215,8 +239,8 @@ const SCAN_CATEGORIES = {
     "2023 Panini Prizm Jaxon Smith-Njigba Silver PSA 10",
   ],
   baseball: [
-    "2022 Bowman Chrome Julio Rodriguez auto refractor PSA",
-    "2022 Bowman Chrome Gunnar Henderson auto refractor PSA",
+    "2022 Bowman Chrome Julio Rodriguez auto refractor PSA 10",
+    "2022 Bowman Chrome Gunnar Henderson auto refractor PSA 10",
     "2023 Topps Chrome Corbin Carroll auto refractor",
     "2022 Topps Chrome Julio Rodriguez PSA 10",
     "2023 Bowman Chrome Paul Skenes auto refractor",
